@@ -15,10 +15,15 @@ MYSQL_DRIVER=${MYSQL_DRIVER:-PyMySQL}
 
 register_database mysql
 
-# Linux distros, thank you for being incredibly consistent
-MYSQL=mysql
+MYSQL_SERVICE_NAME=mysql
 if is_fedora && ! is_oraclelinux; then
-    MYSQL=mariadb
+    MYSQL_SERVICE_NAME=mariadb
+elif is_suse && systemctl list-unit-files | grep -q 'mariadb\.service'; then
+    # Older mariadb packages on SLES 12 provided mysql.service.  The
+    # newer ones on SLES 12 and 15 use mariadb.service; they also
+    # provide a mysql.service symlink for backwards-compatibility, but
+    # let's not rely on that.
+    MYSQL_SERVICE_NAME=mariadb
 fi
 
 # Functions
@@ -34,17 +39,17 @@ function get_database_type_mysql {
 
 # Get rid of everything enough to cleanly change database backends
 function cleanup_database_mysql {
-    stop_service $MYSQL
+    stop_service $MYSQL_SERVICE_NAME
     if is_ubuntu; then
         # Get ruthless with mysql
         apt_get purge -y mysql* mariadb*
         sudo rm -rf /var/lib/mysql
         sudo rm -rf /etc/mysql
         return
-    elif is_suse || is_oraclelinux; then
+    elif is_oraclelinux; then
         uninstall_package mysql-community-server
         sudo rm -rf /var/lib/mysql
-    elif is_fedora; then
+    elif is_suse || is_fedora; then
         uninstall_package mariadb-server
         sudo rm -rf /var/lib/mysql
     else
@@ -64,12 +69,9 @@ function configure_database_mysql {
 
     if is_ubuntu; then
         my_conf=/etc/mysql/my.cnf
-        mysql=mysql
     elif is_suse || is_oraclelinux; then
         my_conf=/etc/my.cnf
-        mysql=mysql
     elif is_fedora; then
-        mysql=mariadb
         my_conf=/etc/my.cnf
         local cracklib_conf=/etc/my.cnf.d/cracklib_password_check.cnf
         if [ -f "$cracklib_conf" ]; then
@@ -82,14 +84,13 @@ function configure_database_mysql {
     # Start mysql-server
     if is_fedora || is_suse; then
         # service is not started by default
-        start_service $mysql
+        start_service $MYSQL_SERVICE_NAME
     fi
 
     # Set the root password - only works the first time. For Ubuntu, we already
-    # did that with debconf before installing the package.
-    if ! is_ubuntu; then
-        sudo mysqladmin -u root password $DATABASE_PASSWORD || true
-    fi
+    # did that with debconf before installing the package, but we still try,
+    # because the package might have been installed already.
+    sudo mysqladmin -u root password $DATABASE_PASSWORD || true
 
     # Update the DB to give user '$DATABASE_USER'@'%' full control of the all databases:
     sudo mysql -uroot -p$DATABASE_PASSWORD -h127.0.0.1 -e "GRANT ALL PRIVILEGES ON *.* TO '$DATABASE_USER'@'%' identified by '$DATABASE_PASSWORD';"
@@ -98,8 +99,8 @@ function configure_database_mysql {
 
     # Change bind-address from localhost (127.0.0.1) to any (::) and
     # set default db type to InnoDB
-    iniset -sudo $my_conf mysqld bind-address "$SERVICE_LISTEN_ADDRESS"
-    iniset -sudo $my_conf mysqld sql_mode STRICT_ALL_TABLES
+    iniset -sudo $my_conf mysqld bind-address "$(ipv6_unquote $SERVICE_LISTEN_ADDRESS)"
+    iniset -sudo $my_conf mysqld sql_mode TRADITIONAL
     iniset -sudo $my_conf mysqld default-storage-engine InnoDB
     iniset -sudo $my_conf mysqld max_connections 1024
     iniset -sudo $my_conf mysqld query_cache_type OFF
@@ -125,7 +126,7 @@ function configure_database_mysql {
         iniset -sudo $my_conf mysqld log-queries-not-using-indexes 1
     fi
 
-    restart_service $mysql
+    restart_service $MYSQL_SERVICE_NAME
 }
 
 function install_database_mysql {
@@ -152,13 +153,11 @@ EOF
         chmod 0600 $HOME/.my.cnf
     fi
     # Install mysql-server
-    if is_suse || is_oraclelinux; then
-        if ! is_package_installed mariadb; then
-            install_package mysql-community-server
-        fi
-    elif is_fedora; then
+    if is_oraclelinux; then
+        install_package mysql-community-server
+    elif is_fedora || is_suse; then
         install_package mariadb-server
-        sudo systemctl enable mariadb
+        sudo systemctl enable $MYSQL_SERVICE_NAME
     elif is_ubuntu; then
         install_package mysql-server
     else
