@@ -1,0 +1,131 @@
+[[local|localrc]]
+HOST_IP=192.168.121.227
+#RECLONE=yes
+ADMIN_PASSWORD=secret
+MYSQL_PASSWORD=secret
+RABBIT_PASSWORD=secret
+SERVICE_PASSWORD=secret
+SERVICE_TOKEN=secret
+#ENABLED_SERVICES=keystone,rabbit,mysql
+KEYSTONE_BRANCH=newton-eol
+
+
+MULTI_HOST=1
+FLAT_INTERFACE=eth1
+FLOATING_RANGE=192.168.100.0/24
+DATA_IP=192.168.110.6
+ENABLE_TENANT_VLANS=True
+Q_USE_NAMESPACE=True
+Q_DEL_NAMESPACE=True
+Q_USE_SECGROUP=True
+PHYSICAL_NETWORK=default
+OVS_PHYSICAL_BRIDGE=br-eth1
+Q_USE_PROVIDERNET_FOR_PUBLIC=True
+OVS_PHYSICAL_BRIDGE=br-ex
+PUBLIC_BRIDGE=br-ex
+OVS_BRIDGE_MAPPINGS=public:br-ex
+API_WORKERS=1
+IP_VERSION=4
+Q_AGENT=openvswitch
+Q_PLUGIN=ml2
+Q_ML2_PLUGIN_TYPE_DRIVERS=flat,vlan,vxlan
+Q_ML2_PLUGIN_VLAN_TYPE_OPTIONS=(network_vlan_ranges=default:600:700)
+Q_ML2_TENANT_NETWORK_TYPE=vxlan
+Q_FLOATING_ALLOCATION_POOL=start=192.168.100.10,end=192.168.100.125
+Q_DVR_MODE=dvr_snat
+PUBLIC_NETWORK_GATEWAY=192.168.100.9
+
+disable_service n-net
+disable_service n-cpu
+enable_service n-cauth
+enable_service placement-api
+NOVA_BRANCH=newton-eol
+
+enable_service q-svc
+enable_service q-agt
+enable_service q-dhcp
+enable_service q-l3
+enable_service neutron
+enable_service q-flavors
+enable_service q-meta
+NEUTRON_BRANCH=newton-eol
+
+disable_service tempest
+disable_service horizon
+disable_service cinder
+#HORIZON_BRANCH=newton-eol
+GLANCE_BRANCH=newton-eol
+NOVAVNC_BRANCH=newton-eol
+CINDER_BRANCH=newton-eol
+NEUTRON_FWAAS_BRANCH=newton-eol
+SWIFT_BRANCH=newton-eol
+
+
+
+KEYSTONE_CATALOG_BACKEND=sql
+
+NOVA_ALLOW_MOVE_TO_SAME_HOST=False
+VIRT_DRIVER=libvirt
+FORCE_CONFIG_DRIVE=False
+
+export LIVE_MIGRATION_AVAILABLE=True
+export USE_BLOCK_MIGRATION_FOR_LIVE_MIGRATION=True
+
+GIT_BASE=https://git.openstack.org
+# Enable LBaaS(v2) services
+
+# Enable heat plugin
+
+# Enable Barbican services
+
+# Enable Magnum Plugin
+VOLUME_BACKING_FILE_SIZE=20G
+
+#SCHEDULER=nova.scheduler.simple.SimpleScheduler
+SCREEN_LOGDIR=$DEST/logs/screen
+# ``HOST_IP`` should be set manually for best results if the NIC configuration
+# of the host is unusual, i.e. ``eth1`` has the default route but ``eth0`` is the
+# public interface.  It is auto-detected in ``stack.sh`` but often is indeterminate
+# on later runs due to the IP moving from an Ethernet interface to a bridge on
+# the host. Setting it here also makes it available for ``openrc`` to include
+# when setting ``OS_AUTH_URL``.
+# ``HOST_IP`` is not set by default.
+
+LOG=True
+
+
+# Logging
+# -------
+
+# By default ``stack.sh`` output only goes to the terminal where it runs.  It can
+# be configured to additionally log to a file by setting ``LOGFILE`` to the full
+# path of the destination log file.  A timestamp will be appended to the given name.
+LOGFILE=devstack.log
+
+# Old log files are automatically removed after 7 days to keep things neat.  Change
+# the number of days by setting ``LOGDAYS``.
+LOGDAYS=2
+
+# Nova logs will be colorized if ``SYSLOG`` is not set; turn this off by setting
+# ``LOG_COLOR`` false.
+#LOG_COLOR=False
+
+[[post-config|/etc/neutron/neutron.conf]]
+[DEFAULT]
+l3_ha = False
+max_l3_agents_per_router = 2
+min_l3_agents_per_router = 2
+l3_ha_net_cidr = 169.254.192.0/18
+dhcp_agents_per_network = 2
+
+[[post-config|/etc/neutron/l3_agent.ini]]
+[DEFAULT]
+ha_confs_path = /opt/stack/data/neutron/ha_confs
+ha_vrrp_auth_type = PASS
+ha_vrrp_auth_password = password
+ha_vrrp_advert_int = 2
+
+#[[post-config|/$Q_PLUGIN_CONF_FILE]]
+#[ovs]
+#local_ip=$DATA_IP
+
