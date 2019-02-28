@@ -45,12 +45,11 @@ declare -A -g GITBRANCH
 declare -A -g GITDIR
 
 TRACK_DEPENDS=${TRACK_DEPENDS:-False}
-KILL_PATH="$(which kill)"
 
 # Save these variables to .stackenv
 STACK_ENV_VARS="BASE_SQL_CONN DATA_DIR DEST ENABLED_SERVICES HOST_IP \
-    KEYSTONE_AUTH_URI KEYSTONE_SERVICE_URI \
-    LOGFILE OS_CACERT SERVICE_HOST STACK_USER TLS_IP \
+    KEYSTONE_AUTH_PROTOCOL KEYSTONE_AUTH_URI KEYSTONE_SERVICE_URI \
+    LOGFILE OS_CACERT SERVICE_HOST SERVICE_PROTOCOL STACK_USER TLS_IP \
     HOST_IPV6 SERVICE_IP_VERSION"
 
 
@@ -88,10 +87,11 @@ function write_clouds_yaml {
         CA_CERT_ARG="--os-cacert $SSL_BUNDLE_FILE"
     fi
     # demo -> devstack
-    $PYTHON $TOP_DIR/tools/update_clouds_yaml.py \
+    $TOP_DIR/tools/update_clouds_yaml.py \
         --file $CLOUDS_YAML \
         --os-cloud devstack \
         --os-region-name $REGION_NAME \
+        --os-identity-api-version 3 \
         $CA_CERT_ARG \
         --os-auth-url $KEYSTONE_SERVICE_URI \
         --os-username demo \
@@ -99,10 +99,11 @@ function write_clouds_yaml {
         --os-project-name demo
 
     # alt_demo -> devstack-alt
-    $PYTHON $TOP_DIR/tools/update_clouds_yaml.py \
+    $TOP_DIR/tools/update_clouds_yaml.py \
         --file $CLOUDS_YAML \
         --os-cloud devstack-alt \
         --os-region-name $REGION_NAME \
+        --os-identity-api-version 3 \
         $CA_CERT_ARG \
         --os-auth-url $KEYSTONE_SERVICE_URI \
         --os-username alt_demo \
@@ -110,26 +111,16 @@ function write_clouds_yaml {
         --os-project-name alt_demo
 
     # admin -> devstack-admin
-    $PYTHON $TOP_DIR/tools/update_clouds_yaml.py \
+    $TOP_DIR/tools/update_clouds_yaml.py \
         --file $CLOUDS_YAML \
         --os-cloud devstack-admin \
         --os-region-name $REGION_NAME \
+        --os-identity-api-version 3 \
         $CA_CERT_ARG \
         --os-auth-url $KEYSTONE_SERVICE_URI \
         --os-username admin \
         --os-password $ADMIN_PASSWORD \
         --os-project-name admin
-
-    # admin with a system-scoped token -> devstack-system
-    $PYTHON $TOP_DIR/tools/update_clouds_yaml.py \
-        --file $CLOUDS_YAML \
-        --os-cloud devstack-system-admin \
-        --os-region-name $REGION_NAME \
-        $CA_CERT_ARG \
-        --os-auth-url $KEYSTONE_SERVICE_URI \
-        --os-username admin \
-        --os-password $ADMIN_PASSWORD \
-        --os-system-scope all
 
     # CLean up any old clouds.yaml files we had laying around
     rm -f $(eval echo ~"$STACK_USER")/.config/openstack/clouds.yaml
@@ -225,7 +216,7 @@ function die_if_not_set {
 function deprecated {
     local text=$1
     DEPRECATED_TEXT+="\n$text"
-    echo "WARNING: $text" >&2
+    echo "WARNING: $text"
 }
 
 # Prints line number and "message" in error format
@@ -236,9 +227,9 @@ function err {
     xtrace=$(set +o | grep xtrace)
     set +o xtrace
     local msg="[ERROR] ${BASH_SOURCE[2]}:$1 $2"
-    echo "$msg" 1>&2;
+    echo $msg 1>&2;
     if [[ -n ${LOGDIR} ]]; then
-        echo "$msg" >> "${LOGDIR}/error.log"
+        echo $msg >> "${LOGDIR}/error.log"
     fi
     $xtrace
     return $exitcode
@@ -291,7 +282,7 @@ function warn {
     xtrace=$(set +o | grep xtrace)
     set +o xtrace
     local msg="[WARNING] ${BASH_SOURCE[2]}:$1 $2"
-    echo "$msg"
+    echo $msg
     $xtrace
     return $exitcode
 }
@@ -311,9 +302,9 @@ function warn {
 # such as "install_package" further abstract things in better ways.
 #
 # ``os_VENDOR`` - vendor name: ``Ubuntu``, ``Fedora``, etc
-# ``os_RELEASE`` - major release: ``16.04`` (Ubuntu), ``23`` (Fedora)
+# ``os_RELEASE`` - major release: ``14.04`` (Ubuntu), ``20`` (Fedora)
 # ``os_PACKAGE`` - package type: ``deb`` or ``rpm``
-# ``os_CODENAME`` - vendor's codename for release: ``xenial``
+# ``os_CODENAME`` - vendor's codename for release: ``trusty``
 
 declare -g os_VENDOR os_RELEASE os_PACKAGE os_CODENAME
 
@@ -328,7 +319,10 @@ function _ensure_lsb_release {
     if [[ -x $(command -v apt-get 2>/dev/null) ]]; then
         sudo apt-get install -y lsb-release
     elif [[ -x $(command -v zypper 2>/dev/null) ]]; then
-        sudo zypper -n install lsb-release
+        # XXX: old code paths seem to have assumed SUSE platforms also
+        # had "yum".  Keep this ordered above yum so we don't try to
+        # install the rh package.  suse calls it just "lsb"
+        sudo zypper -n install lsb
     elif [[ -x $(command -v dnf 2>/dev/null) ]]; then
         sudo dnf install -y redhat-lsb-core
     elif [[ -x $(command -v yum 2>/dev/null) ]]; then
@@ -379,14 +373,9 @@ function GetDistro {
     elif [[ "$os_VENDOR" =~ (Fedora) ]]; then
         # For Fedora, just use 'f' and the release
         DISTRO="f$os_RELEASE"
-    elif is_opensuse; then
+    elif [[ "$os_VENDOR" =~ (openSUSE) ]]; then
         DISTRO="opensuse-$os_RELEASE"
-        # Tumbleweed uses "n/a" as a codename, and the release is a datestring
-        # like 20180218, so not very useful. Leap however uses a release
-        # with a "dot", so for example 15.0
-        [ "$os_CODENAME" = "n/a" -a "$os_RELEASE" = "${os_RELEASE/\./}" ] && \
-            DISTRO="opensuse-tumbleweed"
-    elif is_suse_linux_enterprise; then
+    elif [[ "$os_VENDOR" =~ (SUSE) ]]; then
         # just use major release
         DISTRO="sle${os_RELEASE%.*}"
     elif [[ "$os_VENDOR" =~ (Red.*Hat) || \
@@ -399,6 +388,8 @@ function GetDistro {
         DISTRO="rhel${os_RELEASE::1}"
     elif [[ "$os_VENDOR" =~ (XenServer) ]]; then
         DISTRO="xs${os_RELEASE%.*}"
+    elif [[ "$os_VENDOR" =~ (kvmibm) ]]; then
+        DISTRO="${os_VENDOR}${os_RELEASE::1}"
     else
         # We can't make a good choice here.  Setting a sensible DISTRO
         # is part of the problem, but not the major issue -- we really
@@ -452,7 +443,7 @@ function is_fedora {
     [ "$os_VENDOR" = "Fedora" ] || [ "$os_VENDOR" = "Red Hat" ] || \
         [ "$os_VENDOR" = "RedHatEnterpriseServer" ] || \
         [ "$os_VENDOR" = "CentOS" ] || [ "$os_VENDOR" = "OracleServer" ] || \
-        [ "$os_VENDOR" = "Virtuozzo" ]
+        [ "$os_VENDOR" = "Virtuozzo" ] || [ "$os_VENDOR" = "kvmibm" ]
 }
 
 
@@ -460,30 +451,11 @@ function is_fedora {
 # (openSUSE, SLE).
 # is_suse
 function is_suse {
-    is_opensuse || is_suse_linux_enterprise
-}
-
-
-# Determine if current distribution is an openSUSE distribution
-# is_opensuse
-function is_opensuse {
     if [[ -z "$os_VENDOR" ]]; then
         GetOSVersion
     fi
 
-    [[ "$os_VENDOR" =~ (openSUSE) ]]
-}
-
-
-# Determine if current distribution is a SUSE Linux Enterprise (SLE)
-# distribution
-# is_suse_linux_enterprise
-function is_suse_linux_enterprise {
-    if [[ -z "$os_VENDOR" ]]; then
-        GetOSVersion
-    fi
-
-    [[ "$os_VENDOR" =~ (^SUSE) ]]
+    [[ "$os_VENDOR" =~ (SUSE) ]]
 }
 
 
@@ -547,7 +519,7 @@ function git_clone {
         if [[ ! -d $git_dest ]]; then
             if [[ "$ERROR_ON_CLONE" = "True" ]]; then
                 echo "The $git_dest project was not found; if this is a gate job, add"
-                echo "the project to 'required-projects' in the job definition."
+                echo "the project to the \$PROJECTS variable in the job definition."
                 die $LINENO "Cloning not allowed in this configuration"
             fi
             git_timed clone $git_clone_flags $git_remote $git_dest
@@ -562,8 +534,10 @@ function git_clone {
                 echo "the project to the \$PROJECTS variable in the job definition."
                 die $LINENO "Cloning not allowed in this configuration"
             fi
-            # '--branch' can also take tags
-            git_timed clone $git_clone_flags $git_remote $git_dest --branch $git_ref
+            git_timed clone $git_clone_flags $git_remote $git_dest
+            cd $git_dest
+            # This checkout syntax works for both branches and tags
+            git checkout $git_ref
         elif [[ "$RECLONE" = "True" ]]; then
             # if it does exist then simulate what clone does if asked to RECLONE
             cd $git_dest
@@ -891,24 +865,26 @@ function get_or_add_user_project_role {
     domain_args=$(_get_domain_args $4 $5)
 
     # Gets user role id
-    user_role_id=$(openstack role assignment list \
-        --role $1 \
+    user_role_id=$(openstack role list \
         --user $2 \
+        --column "ID" \
         --project $3 \
+        --column "Name" \
         $domain_args \
-        | grep '^|\s[a-f0-9]\+' | get_field 1)
+        | grep " $1 " | get_field 1)
     if [[ -z "$user_role_id" ]]; then
         # Adds role to user and get it
         openstack role add $1 \
             --user $2 \
             --project $3 \
             $domain_args
-        user_role_id=$(openstack role assignment list \
-            --role $1 \
+        user_role_id=$(openstack role list \
             --user $2 \
+            --column "ID" \
             --project $3 \
+            --column "Name" \
             $domain_args \
-            | grep '^|\s[a-f0-9]\+' | get_field 1)
+            | grep " $1 " | get_field 1)
     fi
     echo $user_role_id
 }
@@ -918,21 +894,55 @@ function get_or_add_user_project_role {
 function get_or_add_user_domain_role {
     local user_role_id
     # Gets user role id
-    user_role_id=$(openstack role assignment list \
-        --role $1 \
+    user_role_id=$(openstack role list \
         --user $2 \
+        --column "ID" \
         --domain $3 \
-        | grep '^|\s[a-f0-9]\+' | get_field 1)
+        --column "Name" \
+        | grep " $1 " | get_field 1)
     if [[ -z "$user_role_id" ]]; then
         # Adds role to user and get it
         openstack role add $1 \
             --user $2 \
             --domain $3
-        user_role_id=$(openstack role assignment list \
-            --role $1 \
+        user_role_id=$(openstack role list \
+            --user $2 \
+            --column "ID" \
+            --domain $3 \
+            --column "Name" \
+            | grep " $1 " | get_field 1)
+    fi
+    echo $user_role_id
+}
+
+# Gets or adds user role to domain
+# Usage: get_or_add_user_domain_role <role> <user> <domain>
+function get_or_add_user_domain_role {
+    local user_role_id
+    # Gets user role id
+    user_role_id=$(openstack role list \
+        --user $2 \
+        --os-url=$KEYSTONE_SERVICE_URI_V3 \
+        --os-identity-api-version=3 \
+        --column "ID" \
+        --domain $3 \
+        --column "Name" \
+        | grep " $1 " | get_field 1)
+    if [[ -z "$user_role_id" ]]; then
+        # Adds role to user and get it
+        openstack role add $1 \
             --user $2 \
             --domain $3 \
-            | grep '^|\s[a-f0-9]\+' | get_field 1)
+            --os-url=$KEYSTONE_SERVICE_URI_V3 \
+            --os-identity-api-version=3
+        user_role_id=$(openstack role list \
+            --user $2 \
+            --os-url=$KEYSTONE_SERVICE_URI_V3 \
+            --os-identity-api-version=3 \
+            --column "ID" \
+            --domain $3 \
+            --column "Name" \
+            | grep " $1 " | get_field 1)
     fi
     echo $user_role_id
 }
@@ -942,21 +952,19 @@ function get_or_add_user_domain_role {
 function get_or_add_group_project_role {
     local group_role_id
     # Gets group role id
-    group_role_id=$(openstack role assignment list \
-        --role $1 \
+    group_role_id=$(openstack role list \
         --group $2 \
         --project $3 \
-        -f value)
+        -c "ID" -f value)
     if [[ -z "$group_role_id" ]]; then
         # Adds role to group and get it
         openstack role add $1 \
             --group $2 \
             --project $3
-        group_role_id=$(openstack role assignment list \
-            --role $1 \
+        group_role_id=$(openstack role list \
             --group $2 \
             --project $3 \
-            -f value)
+            -c "ID" -f value)
     fi
     echo $group_role_id
 }
@@ -998,7 +1006,7 @@ function _get_or_create_endpoint_with_interface {
 }
 
 # Gets or creates endpoint
-# Usage: get_or_create_endpoint <service> <region> <publicurl> [adminurl] [internalurl]
+# Usage: get_or_create_endpoint <service> <region> <publicurl> <adminurl> <internalurl>
 function get_or_create_endpoint {
     # NOTE(jamielennnox): when converting to v3 endpoint creation we go from
     # creating one endpoint with multiple urls to multiple endpoints each with
@@ -1010,13 +1018,9 @@ function get_or_create_endpoint {
     # endpoints they need.
     local public_id
     public_id=$(_get_or_create_endpoint_with_interface $1 public $3 $2)
-    # only create admin/internal urls if provided content for them
-    if [[ -n "$4" ]]; then
-        _get_or_create_endpoint_with_interface $1 admin $4 $2
-    fi
-    if [[ -n "$5" ]]; then
-        _get_or_create_endpoint_with_interface $1 internal $5 $2
-    fi
+    _get_or_create_endpoint_with_interface $1 admin $4 $2
+    _get_or_create_endpoint_with_interface $1 internal $5 $2
+
     # return the public id to indicate success, and this is the endpoint most likely wanted
     echo $public_id
 }
@@ -1154,19 +1158,6 @@ function _parse_package_files {
                 fi
             fi
 
-            # Look for # not:xxx in comment
-            if [[ $line =~ (.*)#.*not:([^ ]*) ]]; then
-                # We are using BASH regexp matching feature.
-                package=${BASH_REMATCH[1]}
-                distros=${BASH_REMATCH[2]}
-                # In bash ${VAR,,} will lowercase VAR
-                # Look for a match in the distro list
-                if [[ ${distros,,} =~ ${DISTRO,,} ]]; then
-                    # If match then skip this package
-                    inst_pkg=0
-                fi
-            fi
-
             if [[ $inst_pkg = 1 ]]; then
                 echo $package
             fi
@@ -1185,8 +1176,6 @@ function _parse_package_files {
 # - ``# NOPRIME`` defers installation to be performed later in `stack.sh`
 # - ``# dist:DISTRO`` or ``dist:DISTRO1,DISTRO2`` limits the selection
 #   of the package to the distros listed.  The distro names are case insensitive.
-# - ``# not:DISTRO`` or ``not:DISTRO1,DISTRO2`` limits the selection
-#   of the package to the distros not listed. The distro names are case insensitive.
 function get_packages {
     local xtrace
     xtrace=$(set +o | grep xtrace)
@@ -1239,9 +1228,9 @@ function get_packages {
             if [[ ! $file_to_parse =~ $package_dir/keystone ]]; then
                 file_to_parse="${file_to_parse} ${package_dir}/keystone"
             fi
-        elif [[ $service == q-* || $service == neutron-* ]]; then
-            if [[ ! $file_to_parse =~ $package_dir/neutron-common ]]; then
-                file_to_parse="${file_to_parse} ${package_dir}/neutron-common"
+        elif [[ $service == q-* ]]; then
+            if [[ ! $file_to_parse =~ $package_dir/neutron ]]; then
+                file_to_parse="${file_to_parse} ${package_dir}/neutron"
             fi
         elif [[ $service == ir-* ]]; then
             if [[ ! $file_to_parse =~ $package_dir/ironic ]]; then
@@ -1341,7 +1330,7 @@ function uninstall_package {
     elif is_fedora; then
         sudo ${YUM:-yum} remove -y "$@" ||:
     elif is_suse; then
-        sudo zypper remove -y "$@" ||:
+        sudo zypper rm "$@" ||:
     else
         exit_distro_not_supported "uninstalling packages"
     fi
@@ -1357,26 +1346,20 @@ function yum_install {
 
     time_start "yum_install"
 
-    # This is a bit tricky, because yum -y assumes missing or failed
-    # packages are OK (see [1]).  We want devstack to stop if we are
-    # installing missing packages.
-    #
-    # Thus we manually match on the output (stack.sh runs in a fixed
-    # locale, so lang shouldn't change).
-    #
-    # If yum returns !0, we echo the result as "YUM_FAILED" and return
-    # that from the awk (we're subverting -e with this trick).
-    # Otherwise we use awk to look for failure strings and return "2"
-    # to indicate a terminal failure.
-    #
-    # [1] https://bugzilla.redhat.com/show_bug.cgi?id=965567
-    parse_yum_result='              \
-        BEGIN { result=0 }          \
-        /^YUM_FAILED/ { result=$2 } \
-        /^No package/ { result=2 }  \
-        /^Failed:/    { result=2 }  \
-        //{ print }                 \
+    # - We run with LC_ALL=C so string matching *should* be OK
+    # - Exit 1 if the failure might get better with a retry.
+    # - Exit 2 if it is fatal.
+    parse_yum_result='             \
+        BEGIN { result=0 }         \
+        /^YUM_FAILED/ { exit $2 }  \
+        /^No package/ { result=2 } \
+        /^Failed:/    { result=2 } \
+        //{ print }                \
         END { exit result }'
+
+    # The manual check for missing packages is because yum -y assumes
+    # missing or failed packages are OK.
+    # See https://bugzilla.redhat.com/show_bug.cgi?id=965567
     (sudo_with_proxies "${YUM:-yum}" install -y "$@" 2>&1 || echo YUM_FAILED $?) \
         | awk "$parse_yum_result" && result=$? || result=$?
 
@@ -1405,139 +1388,79 @@ function zypper_install {
     [[ "$(id -u)" = "0" ]] && sudo="env"
     $sudo http_proxy="${http_proxy:-}" https_proxy="${https_proxy:-}" \
         no_proxy="${no_proxy:-}" \
-        zypper --non-interactive install --auto-agree-with-licenses --no-recommends "$@"
+        zypper --non-interactive install --auto-agree-with-licenses "$@"
+    echo "ADLFO - coming out of zypper_install "
 }
 
-# Run bindep and install packages it outputs
-#
-# Usage:
-#  install_bindep <path-to-bindep.txt> [profile,profile]
-#
-# Note unlike the bindep command itself, profile(s) specified should
-# be a single, comma-separated string, no spaces.
-function install_bindep {
-    local file=$1
-    local profiles=${2:-""}
-    local pkgs
 
-    if [[ ! -f $file ]]; then
-        die $LINENO "Can not find bindep file: $file"
-    fi
+# Process Functions
+# =================
 
-    # converting here makes it much easier to work with passing
-    # arguments
-    profiles=${profiles/,/ /}
+# _run_process() is designed to be backgrounded by run_process() to simulate a
+# fork.  It includes the dirty work of closing extra filehandles and preparing log
+# files to produce the same logs as screen_it().  The log filename is derived
+# from the service name.
+# Uses globals ``CURRENT_LOG_TIME``, ``LOGDIR``, ``SCREEN_LOGDIR``, ``SCREEN_NAME``, ``SERVICE_DIR``
+# If an optional group is provided sg will be used to set the group of
+# the command.
+# _run_process service "command-line" [group]
+function _run_process {
+    # disable tracing through the exec redirects, it's just confusing in the logs.
+    xtrace=$(set +o | grep xtrace)
+    set +o xtrace
 
-    # Note bindep returns 1 when packages need to be installed, so we
-    # have to ignore it's return for "-e"
-    pkgs=$($DEST/bindep-venv/bin/bindep -b --file $file $profiles || true)
-
-    if [[ -n "${pkgs}" ]]; then
-        install_package ${pkgs}
-    fi
-}
-
-function write_user_unit_file {
     local service=$1
     local command="$2"
     local group=$3
-    local user=$4
-    local extra=""
+
+    # Undo logging redirections and close the extra descriptors
+    exec 1>&3
+    exec 2>&3
+    exec 3>&-
+    exec 6>&-
+
+    local logfile="${service}.log.${CURRENT_LOG_TIME}"
+    local real_logfile="${LOGDIR}/${logfile}"
+    if [[ -n ${LOGDIR} ]]; then
+        exec 1>&"$real_logfile" 2>&1
+        bash -c "cd '$LOGDIR' && ln -sf '$logfile' ${service}.log"
+        if [[ -n ${SCREEN_LOGDIR} ]]; then
+            # Drop the backward-compat symlink
+            ln -sf "$real_logfile" ${SCREEN_LOGDIR}/screen-${service}.log
+        fi
+
+        # TODO(dtroyer): Hack to get stdout from the Python interpreter for the logs.
+        export PYTHONUNBUFFERED=1
+    fi
+
+    # reenable xtrace before we do *real* work
+    $xtrace
+
+    # Run under ``setsid`` to force the process to become a session and group leader.
+    # The pid saved can be used with pkill -g to get the entire process group.
     if [[ -n "$group" ]]; then
-        extra="Group=$group"
-    fi
-    local unitfile="$SYSTEMD_DIR/$service"
-    mkdir -p $SYSTEMD_DIR
-
-    iniset -sudo $unitfile "Unit" "Description" "Devstack $service"
-    iniset -sudo $unitfile "Service" "User" "$user"
-    iniset -sudo $unitfile "Service" "ExecStart" "$command"
-    iniset -sudo $unitfile "Service" "KillMode" "process"
-    iniset -sudo $unitfile "Service" "TimeoutStopSec" "300"
-    iniset -sudo $unitfile "Service" "ExecReload" "$KILL_PATH -HUP \$MAINPID"
-    if [[ -n "$group" ]]; then
-        iniset -sudo $unitfile "Service" "Group" "$group"
-    fi
-    iniset -sudo $unitfile "Install" "WantedBy" "multi-user.target"
-
-    # changes to existing units sometimes need a refresh
-    $SYSTEMCTL daemon-reload
-}
-
-function write_uwsgi_user_unit_file {
-    local service=$1
-    local command="$2"
-    local group=$3
-    local user=$4
-    local unitfile="$SYSTEMD_DIR/$service"
-    mkdir -p $SYSTEMD_DIR
-
-    iniset -sudo $unitfile "Unit" "Description" "Devstack $service"
-    iniset -sudo $unitfile "Service" "SyslogIdentifier" "$service"
-    iniset -sudo $unitfile "Service" "User" "$user"
-    iniset -sudo $unitfile "Service" "ExecStart" "$command"
-    iniset -sudo $unitfile "Service" "ExecReload" "$KILL_PATH -HUP \$MAINPID"
-    iniset -sudo $unitfile "Service" "Type" "notify"
-    iniset -sudo $unitfile "Service" "KillMode" "process"
-    iniset -sudo $unitfile "Service" "Restart" "always"
-    iniset -sudo $unitfile "Service" "NotifyAccess" "all"
-    iniset -sudo $unitfile "Service" "RestartForceExitStatus" "100"
-
-    if [[ -n "$group" ]]; then
-        iniset -sudo $unitfile "Service" "Group" "$group"
-    fi
-    iniset -sudo $unitfile "Install" "WantedBy" "multi-user.target"
-
-    # changes to existing units sometimes need a refresh
-    $SYSTEMCTL daemon-reload
-}
-
-function _common_systemd_pitfalls {
-    local cmd=$1
-    # do some sanity checks on $cmd to see things we don't expect to work
-
-    if [[ "$cmd" =~ "sudo" ]]; then
-        read -r -d '' msg << EOF || true  # read returns 1 for EOF, but it is ok here
-You are trying to use run_process with sudo, this is not going to work under systemd.
-
-If you need to run a service as a user other than \$STACK_USER call it with:
-
-   run_process \$name \$cmd \$group \$user
-EOF
-        die $LINENO "$msg"
-    fi
-
-    if [[ ! "$cmd" =~ ^/ ]]; then
-        read -r -d '' msg << EOF || true  # read returns 1 for EOF, but it is ok here
-The cmd="$cmd" does not start with an absolute path. It will fail to
-start under systemd.
-
-Please update your run_process stanza to have an absolute path.
-EOF
-        die $LINENO "$msg"
-    fi
-
-}
-
-# Helper function to build a basic unit file and run it under systemd.
-function _run_under_systemd {
-    local service=$1
-    local command="$2"
-    local cmd=$command
-    # sanity check the command
-    _common_systemd_pitfalls "$cmd"
-
-    local systemd_service="devstack@$service.service"
-    local group=$3
-    local user=${4:-$STACK_USER}
-    if [[ "$command" =~ "uwsgi" ]] ; then
-        write_uwsgi_user_unit_file $systemd_service "$cmd" "$group" "$user"
+        setsid sg $group "$command" & echo $! >$SERVICE_DIR/$SCREEN_NAME/$service.pid
     else
-        write_user_unit_file $systemd_service "$cmd" "$group" "$user"
+        setsid $command & echo $! >$SERVICE_DIR/$SCREEN_NAME/$service.pid
     fi
 
-    $SYSTEMCTL enable $systemd_service
-    $SYSTEMCTL start $systemd_service
+    # Just silently exit this process
+    exit 0
+}
+
+# Helper to remove the ``*.failure`` files under ``$SERVICE_DIR/$SCREEN_NAME``.
+# This is used for ``service_check`` when all the ``screen_it`` are called finished
+# Uses globals ``SCREEN_NAME``, ``SERVICE_DIR``
+# init_service_check
+function init_service_check {
+    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
+
+    if [[ ! -d "$SERVICE_DIR/$SCREEN_NAME" ]]; then
+        mkdir -p "$SERVICE_DIR/$SCREEN_NAME"
+    fi
+
+    rm -f "$SERVICE_DIR/$SCREEN_NAME"/*.failure
 }
 
 # Find out if a process exists by partial name.
@@ -1554,27 +1477,144 @@ function is_running {
 # If the command includes shell metachatacters (;<>*) it must be run using a shell
 # If an optional group is provided sg will be used to run the
 # command as that group.
-# run_process service "command-line" [group] [user]
+# Uses globals ``USE_SCREEN``
+# run_process service "command-line" [group]
 function run_process {
     local service=$1
     local command="$2"
     local group=$3
-    local user=$4
+    local subservice=$4
 
-    local name=$service
+    local name=${subservice:-$service}
 
     time_start "run_process"
     if is_service_enabled $service; then
-        _run_under_systemd "$name" "$command" "$group" "$user"
+        if [[ "$USE_SCREEN" = "True" ]]; then
+            screen_process "$name" "$command" "$group"
+        else
+            # Spawn directly without screen
+            _run_process "$name" "$command" "$group" &
+        fi
     fi
     time_stop "run_process"
+}
+
+# Helper to launch a process in a named screen
+# Uses globals ``CURRENT_LOG_TIME``, ```LOGDIR``, ``SCREEN_LOGDIR``, `SCREEN_NAME``,
+# ``SERVICE_DIR``, ``SCREEN_IS_LOGGING``
+# screen_process name "command-line" [group]
+# Run a command in a shell in a screen window, if an optional group
+# is provided, use sg to set the group of the command.
+function screen_process {
+    local name=$1
+    local command="$2"
+    local group=$3
+
+    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
+
+    screen -S $SCREEN_NAME -X screen -t $name
+
+    local logfile="${name}.log.${CURRENT_LOG_TIME}"
+    local real_logfile="${LOGDIR}/${logfile}"
+    echo "LOGDIR: $LOGDIR"
+    echo "SCREEN_LOGDIR: $SCREEN_LOGDIR"
+    echo "log: $real_logfile"
+    if [[ -n ${LOGDIR} ]]; then
+        if [[ "$SCREEN_IS_LOGGING" == "True" ]]; then
+            screen -S $SCREEN_NAME -p $name -X logfile "$real_logfile"
+            screen -S $SCREEN_NAME -p $name -X log on
+        fi
+        # If logging isn't active then avoid a broken symlink
+        touch "$real_logfile"
+        bash -c "cd '$LOGDIR' && ln -sf '$logfile' ${name}.log"
+        if [[ -n ${SCREEN_LOGDIR} ]]; then
+            # Drop the backward-compat symlink
+            ln -sf "$real_logfile" ${SCREEN_LOGDIR}/screen-${1}.log
+        fi
+    fi
+
+    # sleep to allow bash to be ready to be send the command - we are
+    # creating a new window in screen and then sends characters, so if
+    # bash isn't running by the time we send the command, nothing
+    # happens.  This sleep was added originally to handle gate runs
+    # where we needed this to be at least 3 seconds to pass
+    # consistently on slow clouds. Now this is configurable so that we
+    # can determine a reasonable value for the local case which should
+    # be much smaller.
+    sleep ${SCREEN_SLEEP:-3}
+
+    NL=`echo -ne '\015'`
+    # This fun command does the following:
+    # - the passed server command is backgrounded
+    # - the pid of the background process is saved in the usual place
+    # - the server process is brought back to the foreground
+    # - if the server process exits prematurely the fg command errors
+    # and a message is written to stdout and the process failure file
+    #
+    # The pid saved can be used in stop_process() as a process group
+    # id to kill off all child processes
+    if [[ -n "$group" ]]; then
+        command="sg $group '$command'"
+    fi
+
+    # Append the process to the screen rc file
+    screen_rc "$name" "$command"
+
+    screen -S $SCREEN_NAME -p $name -X stuff "$command & echo \$! >$SERVICE_DIR/$SCREEN_NAME/${name}.pid; fg || echo \"$name failed to start\" | tee \"$SERVICE_DIR/$SCREEN_NAME/${name}.failure\"$NL"
+}
+
+# Screen rc file builder
+# Uses globals ``SCREEN_NAME``, ``SCREENRC``, ``SCREEN_IS_LOGGING``
+# screen_rc service "command-line"
+function screen_rc {
+    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SCREENRC=$TOP_DIR/$SCREEN_NAME-screenrc
+    if [[ ! -e $SCREENRC ]]; then
+        # Name the screen session
+        echo "sessionname $SCREEN_NAME" > $SCREENRC
+        # Set a reasonable statusbar
+        echo "hardstatus alwayslastline '$SCREEN_HARDSTATUS'" >> $SCREENRC
+        # Some distributions override PROMPT_COMMAND for the screen terminal type - turn that off
+        echo "setenv PROMPT_COMMAND /bin/true" >> $SCREENRC
+        echo "screen -t shell bash" >> $SCREENRC
+    fi
+    # If this service doesn't already exist in the screenrc file
+    if ! grep $1 $SCREENRC 2>&1 > /dev/null; then
+        NL=`echo -ne '\015'`
+        echo "screen -t $1 bash" >> $SCREENRC
+        echo "stuff \"$2$NL\"" >> $SCREENRC
+
+        if [[ -n ${LOGDIR} ]] && [[ "$SCREEN_IS_LOGGING" == "True" ]]; then
+            echo "logfile ${LOGDIR}/${1}.log.${CURRENT_LOG_TIME}" >>$SCREENRC
+            echo "log on" >>$SCREENRC
+        fi
+    fi
+}
+
+# Stop a service in screen
+# If a PID is available use it, kill the whole process group via TERM
+# If screen is being used kill the screen window; this will catch processes
+# that did not leave a PID behind
+# Uses globals ``SCREEN_NAME``, ``SERVICE_DIR``
+# screen_stop_service service
+function screen_stop_service {
+    local service=$1
+
+    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
+
+    if is_service_enabled $service; then
+        # Clean up the screen window
+        screen -S $SCREEN_NAME -p $service -X kill || true
+    fi
 }
 
 # Stop a service process
 # If a PID is available use it, kill the whole process group via TERM
 # If screen is being used kill the screen window; this will catch processes
 # that did not leave a PID behind
-# Uses globals ``SERVICE_DIR``
+# Uses globals ``SERVICE_DIR``, ``USE_SCREEN``
 # stop_process service
 function stop_process {
     local service=$1
@@ -1582,34 +1622,149 @@ function stop_process {
     SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
 
     if is_service_enabled $service; then
-        # Only do this for units which appear enabled, this also
-        # catches units that don't really exist for cases like
-        # keystone without a failure.
-        if $SYSTEMCTL is-enabled devstack@$service.service; then
-            $SYSTEMCTL stop devstack@$service.service
-            $SYSTEMCTL disable devstack@$service.service
+        # Kill via pid if we have one available
+        if [[ -r $SERVICE_DIR/$SCREEN_NAME/$service.pid ]]; then
+            pkill -g $(cat $SERVICE_DIR/$SCREEN_NAME/$service.pid)
+            # oslo.service tends to stop actually shutting down
+            # reliably in between releases because someone believes it
+            # is dying too early due to some inflight work they
+            # have. This is a tension. It happens often enough we're
+            # going to just account for it in devstack and assume it
+            # doesn't work.
+            #
+            # Set OSLO_SERVICE_WORKS=True to skip this block
+            if [[ -z "$OSLO_SERVICE_WORKS" ]]; then
+                # TODO(danms): Remove this double-kill when we have
+                # this fixed in all services:
+                # https://bugs.launchpad.net/oslo-incubator/+bug/1446583
+                sleep 1
+                # /bin/true because pkill on a non existent process returns an error
+                pkill -g $(cat $SERVICE_DIR/$SCREEN_NAME/$service.pid) || /bin/true
+            fi
+            rm $SERVICE_DIR/$SCREEN_NAME/$service.pid
+        fi
+        if [[ "$USE_SCREEN" = "True" ]]; then
+            # Clean up the screen window
+            screen_stop_service $service
         fi
     fi
 }
 
-# use systemctl to check service status
+# Helper to get the status of each running service
+# Uses globals ``SCREEN_NAME``, ``SERVICE_DIR``
+# service_check
 function service_check {
     local service
-    for service in ${ENABLED_SERVICES//,/ }; do
-        # because some things got renamed like key => keystone
-        if $SYSTEMCTL is-enabled devstack@$service.service; then
-            # no-pager is needed because otherwise status dumps to a
-            # pager when in interactive mode, which will stop a manual
-            # devstack run.
-            $SYSTEMCTL status devstack@$service.service --no-pager
-        fi
+    local failures
+    SCREEN_NAME=${SCREEN_NAME:-stack}
+    SERVICE_DIR=${SERVICE_DIR:-${DEST}/status}
+
+
+    if [[ ! -d "$SERVICE_DIR/$SCREEN_NAME" ]]; then
+        echo "No service status directory found"
+        return
+    fi
+
+    # Check if there is any failure flag file under $SERVICE_DIR/$SCREEN_NAME
+    # make this -o errexit safe
+    failures=`ls "$SERVICE_DIR/$SCREEN_NAME"/*.failure 2>/dev/null || /bin/true`
+
+    for service in $failures; do
+        service=`basename $service`
+        service=${service%.failure}
+        echo "Error: Service $service is not running"
     done
+
+    if [ -n "$failures" ]; then
+        die $LINENO "More details about the above errors can be found with screen"
+    fi
 }
 
-
+# Tail a log file in a screen if USE_SCREEN is true.
+# Uses globals ``USE_SCREEN``
 function tail_log {
-    deprecated "With the removal of screen support, tail_log is deprecated and will be removed after Queens"
+    local name=$1
+    local logfile=$2
+
+    if [[ "$USE_SCREEN" = "True" ]]; then
+        screen_process "$name" "sudo tail -f $logfile | sed 's/\\\\\\\\x1b/\o033/g'"
+    fi
 }
+
+
+# Deprecated Functions
+# --------------------
+
+# _old_run_process() is designed to be backgrounded by old_run_process() to simulate a
+# fork.  It includes the dirty work of closing extra filehandles and preparing log
+# files to produce the same logs as screen_it().  The log filename is derived
+# from the service name and global-and-now-misnamed ``SCREEN_LOGDIR``
+# Uses globals ``CURRENT_LOG_TIME``, ``SCREEN_LOGDIR``, ``SCREEN_NAME``, ``SERVICE_DIR``
+# _old_run_process service "command-line"
+function _old_run_process {
+    local service=$1
+    local command="$2"
+
+    # Undo logging redirections and close the extra descriptors
+    exec 1>&3
+    exec 2>&3
+    exec 3>&-
+    exec 6>&-
+
+    if [[ -n ${SCREEN_LOGDIR} ]]; then
+        exec 1>&${SCREEN_LOGDIR}/screen-${1}.log.${CURRENT_LOG_TIME} 2>&1
+        ln -sf ${SCREEN_LOGDIR}/screen-${1}.log.${CURRENT_LOG_TIME} ${SCREEN_LOGDIR}/screen-${1}.log
+
+        # TODO(dtroyer): Hack to get stdout from the Python interpreter for the logs.
+        export PYTHONUNBUFFERED=1
+    fi
+
+    exec /bin/bash -c "$command"
+    die "$service exec failure: $command"
+}
+
+# old_run_process() launches a child process that closes all file descriptors and
+# then exec's the passed in command.  This is meant to duplicate the semantics
+# of screen_it() without screen.  PIDs are written to
+# ``$SERVICE_DIR/$SCREEN_NAME/$service.pid`` by the spawned child process.
+# old_run_process service "command-line"
+function old_run_process {
+    local service=$1
+    local command="$2"
+
+    # Spawn the child process
+    _old_run_process "$service" "$command" &
+    echo $!
+}
+
+# Compatibility for existing start_XXXX() functions
+# Uses global ``USE_SCREEN``
+# screen_it service "command-line"
+function screen_it {
+    if is_service_enabled $1; then
+        # Append the service to the screen rc file
+        screen_rc "$1" "$2"
+
+        if [[ "$USE_SCREEN" = "True" ]]; then
+            screen_process "$1" "$2"
+        else
+            # Spawn directly without screen
+            old_run_process "$1" "$2" >$SERVICE_DIR/$SCREEN_NAME/$1.pid
+        fi
+    fi
+}
+
+# Compatibility for existing stop_XXXX() functions
+# Stop a service in screen
+# If a PID is available use it, kill the whole process group via TERM
+# If screen is being used kill the screen window; this will catch processes
+# that did not leave a PID behind
+# screen_stop service
+function screen_stop {
+    # Clean up the screen window
+    stop_process $1
+}
+
 
 # Plugin Functions
 # =================
@@ -1625,26 +1780,13 @@ function enable_plugin {
     local name=$1
     local url=$2
     local branch=${3:-master}
-    if is_plugin_enabled $name; then
+    if [[ ",${DEVSTACK_PLUGINS}," =~ ,${name}, ]]; then
         die $LINENO "Plugin attempted to be enabled twice: ${name} ${url} ${branch}"
     fi
     DEVSTACK_PLUGINS+=",$name"
     GITREPO[$name]=$url
     GITDIR[$name]=$DEST/$name
     GITBRANCH[$name]=$branch
-}
-
-# is_plugin_enabled <name>
-#
-# Check if the plugin was enabled, e.g. using enable_plugin
-#
-# ``name`` The name with which the plugin was enabled
-function is_plugin_enabled {
-    local name=$1
-    if [[ ",${DEVSTACK_PLUGINS}," =~ ",${name}," ]]; then
-        return 0
-    fi
-    return 1
 }
 
 # fetch_plugins
@@ -1762,35 +1904,6 @@ function run_phase {
     else
         run_plugins $mode $phase
     fi
-}
-
-# define_plugin <name>
-#
-# This function is a no-op.  It allows a plugin to define its name So
-# that other plugins may reference it by name.  It should generally be
-# the last component of the canonical git repo name.  E.g.,
-# openstack/devstack-foo should use "devstack-foo" as the name here.
-#
-# This function is currently a noop, but the value may still be used
-# by external tools (as in plugin_requires) and may be used by
-# devstack in the future.
-#
-# ``name`` is an arbitrary name - (aka: glusterfs, nova-docker, zaqar)
-function define_plugin {
-    :
-}
-
-# plugin_requires <name> <other>
-#
-# This function is a no-op.  It is currently used by external tools
-# (such as the devstack module for Ansible) to automatically generate
-# local.conf files.  It is not currently used by devstack itself to
-# resolve dependencies.
-#
-# ``name`` is an arbitrary name - (aka: glusterfs, nova-docker, zaqar)
-# ``other`` is the name of another plugin
-function plugin_requires {
-    :
 }
 
 
@@ -2098,23 +2211,6 @@ function cidr2netmask {
     echo ${1-0}.${2-0}.${3-0}.${4-0}
 }
 
-# Check if this is a valid ipv4 address string
-function is_ipv4_address {
-    local address=$1
-    local regex='([0-9]{1,3}\.){3}[0-9]{1,3}'
-    # TODO(clarkb) make this more robust
-    if [[ "$address" =~ $regex ]] ; then
-        return 0
-    else
-        return 1
-    fi
-}
-
-# Remove "[]" around urlquoted IPv6 addresses
-function ipv6_unquote {
-    echo $1 | tr -d []
-}
-
 # Gracefully cp only if source file/dir exists
 # cp_it source destination
 function cp_it {
@@ -2162,38 +2258,12 @@ function maskip {
     echo $subnet
 }
 
-function is_provider_network {
-    if [ "$Q_USE_PROVIDER_NETWORKING" == "True" ]; then
-        return 0
-    fi
-    return 1
-}
-
-
-# Return just the <major>.<minor> for the given python interpreter
-function _get_python_version {
-    local interp=$1
-    local version
-    # disable erroring out here, otherwise if python 3 doesn't exist we fail hard.
-    if [[ -x $(which $interp 2> /dev/null) ]]; then
-        version=$($interp -c 'import sys; print("%s.%s" % sys.version_info[0:2])')
-    fi
-    echo ${version}
-}
-
 # Return the current python as "python<major>.<minor>"
 function python_version {
     local python_version
-    python_version=$(_get_python_version python2)
+    python_version=$(python -c 'import sys; print("%s.%s" % sys.version_info[0:2])')
     echo "python${python_version}"
 }
-
-function python3_version {
-    local python3_version
-    python3_version=$(_get_python_version python3)
-    echo "python${python3_version}"
-}
-
 
 # Service wrapper to restart services
 # restart_service service-name
@@ -2238,12 +2308,11 @@ function stop_service {
     fi
 }
 
-# Service wrapper to reload services
-# If the service was not in running state it will start it
+# Service wrapper to stop services
 # reload_service service-name
 function reload_service {
     if [ -x /bin/systemctl ]; then
-        sudo /bin/systemctl reload-or-restart $1
+        sudo /bin/systemctl reload $1
     else
         sudo service $1 reload
     fi
@@ -2305,7 +2374,7 @@ function time_start {
     if [[ -n "$start_time" ]]; then
         die $LINENO "Trying to start the clock on $name, but it's already been started"
     fi
-    _TIME_START[$name]=$(date +%s%3N)
+    _TIME_START[$name]=$(date +%s)
 }
 
 # time_stop $name
@@ -2326,7 +2395,7 @@ function time_stop {
     if [[ -z "$start_time" ]]; then
         die $LINENO "Trying to stop the clock on $name, but it was never started"
     fi
-    end_time=$(date +%s%3N)
+    end_time=$(date +%s)
     elapsed_time=$(($end_time - $start_time))
     total=${_TIME_TOTAL[$name]:-0}
     # reset the clock so we can start it in the future
@@ -2334,56 +2403,16 @@ function time_stop {
     _TIME_TOTAL[$name]=$(($total + $elapsed_time))
 }
 
-function oscwrap {
-    local out
-    local rc
-    local start
-    local end
-    # Cannot use timer_start and timer_stop as we run in subshells
-    # and those rely on modifying vars in the same process (which cannot
-    # happen from a subshell.
-    start=$(date +%s%3N)
-    out=$(command openstack "$@")
-    rc=$?
-    end=$(date +%s%3N)
-    echo $((end - start)) >> $OSCWRAP_TIMER_FILE
-
-    echo "$out"
-    return $rc
-}
-
-function install_oscwrap {
-    # File to accumulate our timing data
-    OSCWRAP_TIMER_FILE=$(mktemp)
-    # Bash by default doesn't expand aliases, allow it for the aliases
-    # we want to whitelist.
-    shopt -s expand_aliases
-    # Remove all aliases that might be expanded to preserve old unexpanded
-    # behavior
-    unalias -a
-    # Add only the alias we want for openstack
-    alias openstack=oscwrap
-}
-
-function cleanup_oscwrap {
-    local total=0
-    total=$(cat $OSCWRAP_TIMER_FILE | $PYTHON -c "import sys; print(sum(int(l) for l in sys.stdin))")
-    _TIME_TOTAL["osc"]=$total
-    rm $OSCWRAP_TIMER_FILE
-}
-
 # time_totals
 #  Print out total time summary
 function time_totals {
     local elapsed_time
     local end_time
-    local len=20
+    local len=15
     local xtrace
-    local unaccounted_time
 
     end_time=$(date +%s)
     elapsed_time=$(($end_time - $_TIME_BEGIN))
-    unaccounted_time=$elapsed_time
 
     # pad 1st column this far
     for t in ${!_TIME_TOTAL[*]}; do
@@ -2392,27 +2421,20 @@ function time_totals {
         fi
     done
 
-    cleanup_oscwrap
-
     xtrace=$(set +o | grep xtrace)
     set +o xtrace
 
     echo
     echo "========================="
     echo "DevStack Component Timing"
-    echo " (times are in seconds)  "
-    echo "========================="
-    for t in ${!_TIME_TOTAL[*]}; do
-        local v=${_TIME_TOTAL[$t]}
-        # because we're recording in milliseconds
-        v=$(($v / 1000))
-        printf "%-${len}s %3d\n" "$t" "$v"
-        unaccounted_time=$(($unaccounted_time - $v))
-    done
-    echo "-------------------------"
-    printf "%-${len}s %3d\n" "Unaccounted time" "$unaccounted_time"
     echo "========================="
     printf "%-${len}s %3d\n" "Total runtime" "$elapsed_time"
+    echo
+    for t in ${!_TIME_TOTAL[*]}; do
+        local v=${_TIME_TOTAL[$t]}
+        printf "%-${len}s %3d\n" "$t" "$v"
+    done
+    echo "========================="
 
     $xtrace
 }
