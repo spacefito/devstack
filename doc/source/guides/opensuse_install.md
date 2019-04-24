@@ -26,4 +26,21 @@
     sudo mkdir -p /opt/stack
     sudo chown currentuser:wheel /opt/stack
     ```
-      
+  - Clone devstack repo
+    ```
+    cd /opt/stack
+    git clone https://git.openstack.org/openstack-dev/devstack
+    ```
+  - Prepair simple local.conf: 
+    ```
+    cd /opt/stack/devstack
+    vi local.conf
+    ```
+    local.conf should look something like: 
+    ```
+    [[local|localrc]]
+    ADMIN_PASSWORD=secret
+    DATABASE_PASSWORD=$ADMIN_PASSWORD
+    RABBIT_PASSWORD=$ADMIN_PASSWORD
+    SERVICE_PASSWORD=$ADMIN_PASSWORD
+    
