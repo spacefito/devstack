@@ -53,20 +53,21 @@
      DONE:
      ```
      =========================
-DevStack Component Timing
- (times are in seconds)  
-=========================
-run_process           56
-test_with_retry        3
-osc                  195
-wait_for_service      21
-git_timed            101
-dbsync               422
-pip_install          492
--------------------------
-Unaccounted time     1192
-=========================
-Total runtime        2482
+     DevStack Component Timing
+      (times are in seconds)  
+     =========================
+     run_process           56
+     test_with_retry        3
+     osc                  195
+     wait_for_service      21
+     git_timed            101
+     dbsync               422
+     pip_install          492
+     -------------------------
+     Unaccounted time     1192
+     =========================
+     Total runtime        2482
+     ```
 
 
 
